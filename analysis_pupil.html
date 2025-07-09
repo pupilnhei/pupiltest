@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pupil Trace Data Analysis</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+        }
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            color: #495057;
+            font-size: 16px;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .chart-container {
+            margin: 30px 0;
+            height: 400px;
+        }
+        .analysis-section {
+            margin: 30px 0;
+        }
+        .analysis-section h2 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        #fileInput {
+            display: none;
+        }
+        .load-button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 20px auto;
+            display: block;
+        }
+        .load-button:hover {
+            background-color: #0056b3;
+        }
+        .stimulus-marker {
+            background-color: rgba(255, 99, 132, 0.2);
+            border-left: 2px solid rgb(255, 99, 132);
+            padding: 10px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Pupil Response Trace Analysis</h1>
+        
+        <button class="load-button" onclick="loadFile()">Load Excel File</button>
+        <input type="file" id="fileInput" accept=".xlsx,.xls" onchange="handleFile(event)">
+        
+        <div id="loading" style="display:none; text-align:center; padding:20px;">
+            <p>Loading and analyzing data...</p>
+        </div>
+        
+        <div id="results" style="display:none;">
+            <div class="stats-grid" id="statsGrid"></div>
+            
+            <div class="analysis-section">
+                <h2>Pupil Size Over Time</h2>
+                <div class="chart-container">
+                    <canvas id="pupilChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="analysis-section">
+                <h2>Stimulus Response Analysis</h2>
+                <div id="stimulusAnalysis"></div>
+            </div>
+            
+            <div class="analysis-section">
+                <h2>Statistical Summary</h2>
+                <div id="statisticalSummary"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let analysisData = [];
+        let chart = null;
+
+        async function loadFile() {
+            // Try to load the file from the window.fs API
+            try {
+                const response = await window.fs.readFile('raw trace data.xlsx');
+                const workbook = XLSX.read(response, { cellDates: true });
+                processWorkbook(workbook);
+            } catch (error) {
+                // If window.fs is not available, show file picker
+                document.getElementById('fileInput').click();
+            }
+        }
+
+        function handleFile(e) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+                processWorkbook(workbook);
+            };
+            
+            reader.readAsArrayBuffer(file);
+        }
+
+        function processWorkbook(workbook) {
+            document.getElementById('loading').style.display = 'block';
+            
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const data = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+            
+            // Parse data
+            analysisData = [];
+            const dataRows = data.slice(1);
+            
+            dataRows.forEach(row => {
+                if (row[1] !== null && row[1] !== undefined) {
+                    analysisData.push({
+                        id: row[0],
+                        pupilSize: parseFloat(row[1]),
+                        timestamp: parseInt(row[2]),
+                        frame: parseInt(row[3]),
+                        actualTrigger: row[4],
+                        theoreticalTrigger: row[8],
+                        relativeTime: row[7] || ((row[2] - dataRows[0][2]) / 1000)
+                    });
+                }
+            });
+            
+            analyzeData();
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('results').style.display = 'block';
+        }
+
+        function analyzeData() {
+            // Calculate basic statistics
+            const pupilSizes = analysisData.map(d => d.pupilSize);
+            const stats = {
+                count: pupilSizes.length,
+                mean: pupilSizes.reduce((a, b) => a + b, 0) / pupilSizes.length,
+                min: Math.min(...pupilSizes),
+                max: Math.max(...pupilSizes),
+                duration: (analysisData[analysisData.length - 1].timestamp - analysisData[0].timestamp) / 1000
+            };
+            
+            // Calculate standard deviation
+            const squaredDiffs = pupilSizes.map(size => Math.pow(size - stats.mean, 2));
+            stats.stdDev = Math.sqrt(squaredDiffs.reduce((a, b) => a + b, 0) / pupilSizes.length);
+            
+            // Display statistics
+            displayStats(stats);
+            
+            // Create chart
+            createChart();
+            
+            // Analyze stimulus responses
+            analyzeStimuli();
+        }
+
+        function displayStats(stats) {
+            const statsGrid = document.getElementById('statsGrid');
+            statsGrid.innerHTML = `
+                <div class="stat-card">
+                    <h3>Total Samples</h3>
+                    <div class="stat-value">${stats.count}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Duration</h3>
+                    <div class="stat-value">${stats.duration.toFixed(1)}s</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Mean Pupil Size</h3>
+                    <div class="stat-value">${stats.mean.toFixed(3)}mm</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Std Deviation</h3>
+                    <div class="stat-value">${stats.stdDev.toFixed(3)}mm</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Min Size</h3>
+                    <div class="stat-value">${stats.min.toFixed(3)}mm</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Max Size</h3>
+                    <div class="stat-value">${stats.max.toFixed(3)}mm</div>
+                </div>
+            `;
+        }
+
+        function createChart() {
+            const ctx = document.getElementById('pupilChart').getContext('2d');
+            
+            // Prepare data for chart
+            const chartData = analysisData.map(d => ({
+                x: d.relativeTime,
+                y: d.pupilSize
+            }));
+            
+            // Find stimulus periods
+            const stimulusData = analysisData.filter(d => d.actualTrigger === 'Stimulus');
+            
+            if (chart) {
+                chart.destroy();
+            }
+            
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Pupil Size',
+                        data: chartData,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Pupil Size Over Time'
+                        },
+                        legend: {
+                            display: true
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: {
+                                display: true,
+                                text: 'Time (seconds)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Pupil Size (mm)'
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Add stimulus markers
+            if (stimulusData.length > 0) {
+                const annotations = [];
+                let inStimulus = false;
+                let stimStart = 0;
+                
+                for (let i = 0; i < analysisData.length; i++) {
+                    if (analysisData[i].actualTrigger === 'Stimulus' && !inStimulus) {
+                        inStimulus = true;
+                        stimStart = analysisData[i].relativeTime;
+                    } else if (analysisData[i].actualTrigger !== 'Stimulus' && inStimulus) {
+                        inStimulus = false;
+                        annotations.push({
+                            type: 'box',
+                            xMin: stimStart,
+                            xMax: analysisData[i-1].relativeTime,
+                            backgroundColor: 'rgba(255, 99, 132, 0.25)'
+                        });
+                    }
+                }
+            }
+        }
+
+        function analyzeStimuli() {
+            const stimulusData = analysisData.filter(d => d.actualTrigger === 'Stimulus');
+            
+            if (stimulusData.length === 0) {
+                document.getElementById('stimulusAnalysis').innerHTML = '<p>No stimulus markers found in the data.</p>';
+                return;
+            }
+            
+            // Group consecutive stimuli
+            const stimGroups = [];
+            let currentGroup = [stimulusData[0]];
+            
+            for (let i = 1; i < stimulusData.length; i++) {
+                const timeDiff = stimulusData[i].timestamp - stimulusData[i-1].timestamp;
+                if (timeDiff > 100) {
+                    stimGroups.push(currentGroup);
+                    currentGroup = [stimulusData[i]];
+                } else {
+                    currentGroup.push(stimulusData[i]);
+                }
+            }
+            stimGroups.push(currentGroup);
+            
+            // Analyze each stimulus period
+            let html = `<p>Found ${stimGroups.length} stimulus periods:</p>`;
+            
+            stimGroups.forEach((group, idx) => {
+                const startTime = group[0].timestamp;
+                const endTime = group[group.length - 1].timestamp;
+                
+                // Get pupil data around stimulus
+                const beforeData = analysisData.filter(d => 
+                    d.timestamp >= (startTime - 1000) && d.timestamp < startTime
+                ).map(d => d.pupilSize);
+                
+                const duringData = analysisData.filter(d => 
+                    d.timestamp >= startTime && d.timestamp <= endTime
+                ).map(d => d.pupilSize);
+                
+                const afterData = analysisData.filter(d => 
+                    d.timestamp > endTime && d.timestamp <= (endTime + 1000)
+                ).map(d => d.pupilSize);
+                
+                const beforeMean = beforeData.length > 0 ? 
+                    beforeData.reduce((a, b) => a + b, 0) / beforeData.length : 0;
+                const duringMean = duringData.length > 0 ? 
+                    duringData.reduce((a, b) => a + b, 0) / duringData.length : 0;
+                const afterMean = afterData.length > 0 ? 
+                    afterData.reduce((a, b) => a + b, 0) / afterData.length : 0;
+                
+                html += `
+                    <div class="stimulus-marker">
+                        <h4>Stimulus Period ${idx + 1}</h4>
+                        <p><strong>Time:</strong> ${group[0].relativeTime.toFixed(2)}s - ${group[group.length - 1].relativeTime.toFixed(2)}s</p>
+                        <p><strong>Duration:</strong> ${((endTime - startTime) / 1000).toFixed(2)}s</p>
+                        <p><strong>Pupil Response:</strong></p>
+                        <ul>
+                            <li>Before (1s): ${beforeMean.toFixed(3)}mm (n=${beforeData.length})</li>
+                            <li>During: ${duringMean.toFixed(3)}mm (n=${duringData.length})</li>
+                            <li>After (1s): ${afterMean.toFixed(3)}mm (n=${afterData.length})</li>
+                            <li>Constriction: ${beforeMean > 0 ? ((beforeMean - duringMean) / beforeMean * 100).toFixed(1) : 0}%</li>
+                        </ul>
+                    </div>
+                `;
+            });
+            
+            document.getElementById('stimulusAnalysis').innerHTML = html;
+            
+            // Additional statistical summary
+            createStatisticalSummary();
+        }
+        
+        function createStatisticalSummary() {
+            // Separate data by theoretical trigger if available
+            const offData = analysisData.filter(d => d.theoreticalTrigger === 'OFF').map(d => d.pupilSize);
+            const onData = analysisData.filter(d => d.theoreticalTrigger === 'ON').map(d => d.pupilSize);
+            
+            let html = '<h3>Overall Analysis</h3>';
+            
+            // Frame rate analysis
+            const frameIntervals = [];
+            for (let i = 1; i < analysisData.length; i++) {
+                frameIntervals.push(analysisData[i].timestamp - analysisData[i-1].timestamp);
+            }
+            const avgInterval = frameIntervals.reduce((a, b) => a + b, 0) / frameIntervals.length;
+            const frameRate = 1000 / avgInterval;
+            
+            html += `
+                <p><strong>Recording Parameters:</strong></p>
+                <ul>
+                    <li>Average frame rate: ${frameRate.toFixed(1)} fps</li>
+                    <li>Average frame interval: ${avgInterval.toFixed(1)} ms</li>
+                    <li>Total frames: ${analysisData.length}</li>
+                </ul>
+            `;
+            
+            if (offData.length > 0 || onData.length > 0) {
+                html += '<p><strong>Theoretical Trigger Analysis:</strong></p><ul>';
+                
+                if (offData.length > 0) {
+                    const offMean = offData.reduce((a, b) => a + b, 0) / offData.length;
+                    html += `<li>OFF periods: ${offMean.toFixed(3)}mm (n=${offData.length})</li>`;
+                }
+                
+                if (onData.length > 0) {
+                    const onMean = onData.reduce((a, b) => a + b, 0) / onData.length;
+                    html += `<li>ON periods: ${onMean.toFixed(3)}mm (n=${onData.length})</li>`;
+                }
+                
+                html += '</ul>';
+            }
+            
+            // Pupil size distribution
+            const sizes = analysisData.map(d => d.pupilSize);
+            const sortedSizes = [...sizes].sort((a, b) => a - b);
+            const median = sortedSizes[Math.floor(sortedSizes.length / 2)];
+            const q1 = sortedSizes[Math.floor(sortedSizes.length * 0.25)];
+            const q3 = sortedSizes[Math.floor(sortedSizes.length * 0.75)];
+            
+            html += `
+                <p><strong>Pupil Size Distribution:</strong></p>
+                <ul>
+                    <li>Median: ${median.toFixed(3)}mm</li>
+                    <li>Q1 (25th percentile): ${q1.toFixed(3)}mm</li>
+                    <li>Q3 (75th percentile): ${q3.toFixed(3)}mm</li>
+                    <li>IQR: ${(q3 - q1).toFixed(3)}mm</li>
+                </ul>
+            `;
+            
+            document.getElementById('statisticalSummary').innerHTML = html;
+        }
+        
+        // Auto-load if file is available
+        window.onload = function() {
+            loadFile();
+        };
+    </script>
+</body>
+</html>
